@@ -19,7 +19,6 @@ def bland_altman_plot(true, pred, label):
     diff = pred - true                      # Y
     mean_diff = np.mean(diff)
     std_diff = np.std(diff)
-    print(mean)
     plt.figure(figsize=(6, 4))
     plt.scatter(mean, diff, alpha=0.5)
     plt.axhline(mean_diff, color='red', linestyle='--', label=f"Mean: {mean_diff:.2f}")

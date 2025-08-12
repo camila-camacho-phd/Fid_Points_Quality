@@ -4,22 +4,22 @@ import pandas as pd
 import lightgbm as lgb
 import shap
 from scipy.stats import pearsonr
-from sklearn.model_selection import KFold, GridSearchCV, GroupShuffleSplit, train_test_split, cross_val_score
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import KFold, GridSearchCV, GroupShuffleSplit, train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.impute import SimpleImputer
 import matplotlib.pyplot as plt
-from Scripts.other_functions import bland_altman_plot
+from other_functions import bland_altman_plot
 
 class BPModel_LightGBM:
-    def __init__(self, data: dict, data_target: dict, target_label: list, default_model: bool, limit_data: int = 10000):
+    def __init__(self, data: dict, data_target: dict, target_label: list, features_list: list, default_model: bool = True, limit_data: int = 10000):
 
-        dataframe_X = pd.DataFrame(columns=features)
+        dataframe_X = pd.DataFrame(columns=features_list)
         for p in data.keys():
             p_array = data[p][f"mean_{p}"].T
             p_array = p_array[:len(p_array)//2]
             col_p = np.full(len(p_array), p, dtype=object)
-            p_df = pd.DataFrame(p_array,columns=features)
+            p_df = pd.DataFrame(p_array,columns=features_list)
             p_df["patient"] = col_p
             dataframe_X = pd.concat([dataframe_X,p_df],ignore_index=True)
         groups = dataframe_X["patient"].values
@@ -42,7 +42,7 @@ class BPModel_LightGBM:
         self.model_setup(valid_set=True)
         self.split(valid_set=True)
         if default_model:
-            self.error_test, self.error_valid = self.prediction(valid_set=True)
+            self.error_test, self.error_valid = self.prediction(valid_set=True, shap=True)
 
         # Splitting the data patient wise to avoid data leakage
     def split(self, test_size: int = 0.2, n_split: int = 1, valid_set: bool = False):
@@ -100,7 +100,7 @@ class BPModel_LightGBM:
         
         return multi_model
     
-    def prediction(self, valid_set: bool = False):
+    def prediction(self, valid_set: bool = False, shap: bool = False):
 
         multi_model = self.model
         X_train, y_train, X_test, y_test, X_valid, y_valid = self.X_train, self.y_train, self.X_test, self.y_test, self.X_valid, self.y_valid
@@ -109,14 +109,15 @@ class BPModel_LightGBM:
         multi_model.fit(X_train, y_train)
         # Testing
         predictions = multi_model.predict(X_test)
-        df_pred_error = self.results(predictions, y_test, target_label)
+        df_pred_error = self.results(predictions, y_test, self.target_label)
 
-        self.SHAPvalues(self.target_label)
+        if shap:
+            self.SHAPvalues(self.target_label)
         
         # Validation
         if valid_set:
             predictions_valid = multi_model.predict(X_valid)
-            df_valid_error = self.results(predictions_valid, y_valid, target_label)
+            df_valid_error = self.results(predictions_valid, y_valid, self.target_label)
             return df_pred_error, df_valid_error
 
         return df_pred_error
@@ -164,9 +165,10 @@ class BPModel_LightGBM:
         stdmse = np.sqrt(( 1 / (len(true)-1) ) * np.sum( ((pred - true)**2 - mse)**2 ))
         rmse = np.sqrt(mean_squared_error(true, pred))
         r,_ = pearsonr(true, pred)
-        df = pd.DataFrame([me,stdme,mae,stdmae,mse,stdmse,rmse,r],index=["ME","stdME","MAE","stdMAE","MSE","stdMSE","RMSE","R Pearson"])
+        r2 = r2_score(true,pred)
+        df = pd.DataFrame([me,stdme,mae,stdmae,mse,stdmse,rmse,r,r2],index=["ME","stdME","MAE","stdMAE","MSE","stdMSE","RMSE","R Pearson","R^2"])
         
-        print(f"Errors of {label} \nME: {me:.3f} ± {stdme:.3f} \nMAE: {mae:.3f} ± {stdmae:.3f} \nMSE: {mse:.3f} ± {stdmse:.3f} \nRMSE: {rmse:.3f} \nPearson: {r:.3f}")
+        print(f"Errors of {label} \nME: {me:.3f} ± {stdme:.3f} \nMAE: {mae:.3f} ± {stdmae:.3f} \nMSE: {mse:.3f} ± {stdmse:.3f} \nRMSE: {rmse:.3f} \nPearson: {r:.3f} \nR^2: {r2:.3f}")
         bland_altman_plot(true, pred, label)
 
         return df
@@ -181,6 +183,7 @@ class BPModel_LightGBM:
         return df_pred_error
 
     def SHAPvalues(self, target_labels: list):
+        print("Processing SHAP values:")
         X = self.X
         multi_model = self.model
         for i in range(len(target_labels)):
@@ -194,143 +197,3 @@ class BPModel_LightGBM:
             plt.title(f"SHAP Plot for {target_labels[i]}", fontsize=14)
             plt.savefig(f"{target_labels[i]}_shap_summary_plot.png", dpi=300, bbox_inches='tight')
             plt.close()
-
-
-
-data_path = 'C:/Users/adhn565/Documents/Data/data_clean_features.h5'
-data_path_target = 'BP_values.h5'
-data = {}
-data_target = {}
-segment_ids = {}
-target_label = ["SBP","DBP","MAP"]
-
-with h5py.File(data_path, 'r') as f:
-    for group_name in f:
-        group = f[group_name]
-        data[group_name] = {}
-        for dtset_name in group:
-            data[group_name][dtset_name] = group[dtset_name][()]
-            data[group_name][dtset_name] = data[group_name][dtset_name]
-        segment_ids[group_name] = group["segments"][0]
-    
-    fiducial = f[group_name]["segments"].attrs['fiducial_order']
-    features = f[group_name][f"mean_{group_name}"].attrs['features']
-    fiducial = [f.decode() if isinstance(f, bytes) else f for f in fiducial]
-    features = [f.decode() if isinstance(f, bytes) else f for f in features]
-
-with h5py.File(data_path_target, 'r') as f:
-    for group_name in f:
-        group = f[group_name]
-        data_target[group_name] = {}
-        for dtset_name in group:
-            data_target[group_name][dtset_name] = group[dtset_name][()]
-            data_target[group_name][dtset_name] = data_target[group_name][dtset_name]
-
-# Initialize the BPModel_LightGBM with the data and target
-# Note: The default_model parameter is set to True to use the default model setup and perform initial predictions.
-bp = BPModel_LightGBM(data,data_target,target_label= target_label,default_model=True)
-errors_test, errors_valid = bp.error_test, bp.error_valid
-
-#You can do your own splitting of the data.
-bp.split(test_size=0.2, n_split=1, valid_set=True)
-
-# Example of how to use the grid search for hyperparameter tuning
-# Note: The function grid_searchCV will return the best model, best parameters and the grid search object.
-# The grid_searchCV function will automatically update the model with the best parameters so you can use prediction directly after it.
-param_grid = {
-        'estimator__learning_rate': [0.05, 0.1],
-        'estimator__n_estimators': [400, 800],
-        # 'estimator__max_depth': [-1, 15],
-        # 'estimator__num_leaves': [50]
-    }
-bp.grid_searchCV(param_grid=param_grid,n_splits=2)
-errors_test, errors_valid = bp.prediction(valid_set=True)
-
-# Example of how to use the model for own parameters and prediction
-# Note: The parameters should be a dictionary with the same keys as the default parameters.
-parameters = {
-        "random_state": 42,
-        "n_estimators": 800,
-        "learning_rate": 0.05,
-        "max_depth": -1,
-        "num_leaves": 50
-        }
-bp.model_setup(parameters=parameters, valid_set=True)
-errors_test, errors_valid = bp.prediction(valid_set=True)
-
-# dataframe_X = pd.DataFrame(columns=features)
-# for p in data.keys():
-#     p_array = data[p][f"mean_{p}"].T
-#     p_array = p_array[:len(p_array)//2]
-#     col_p = np.full(len(p_array), p, dtype=object)
-#     p_df = pd.DataFrame(p_array,columns=features)
-#     p_df["patient"] = col_p
-#     dataframe_X = pd.concat([dataframe_X,p_df],ignore_index=True)
-# groups = dataframe_X["patient"].values
-# dataframe_X = dataframe_X.drop(columns="patient")
-
-# target_label = ["SBP","DBP","MAP"]
-# df_target = pd.DataFrame(columns= target_label)
-# for p in data.keys():
-#     p_array = data_target[p]["Bp_values"].T
-#     p_df = pd.DataFrame(p_array,columns= target_label)
-#     df_target = pd.concat([df_target,p_df],ignore_index=True)
-
-# dataframe_X = dataframe_X[:10000]
-# groups = groups[:10000]
-# df_target = df_target[:10000]
-# print(dataframe_X.shape,groups.shape,df_target.shape)
-
-# # Splitting the data patient wise to avoid data leakage
-# gss = GroupShuffleSplit(n_splits=1, train_size=0.8, test_size=0.2, random_state=42)
-# train_idx, test_idx = next(gss.split(dataframe_X, df_target, groups=groups))
-# X_train, X_test = dataframe_X.iloc[train_idx], dataframe_X.iloc[test_idx]
-# y_train, y_test = df_target.iloc[train_idx], df_target.iloc[test_idx]
-# a, X_valid, b, y_valid = train_test_split(X_train,y_train,test_size=0.2, random_state=42)
-
-# # Impute the data since I have a couple of nan values, doing it after the splitting to avoid data leakage
-# imputer_X = SimpleImputer(strategy='median')
-# X_train = imputer_X.fit_transform(X_train)
-# X_test = imputer_X.transform(X_test)
-# X_valid = imputer_X.fit_transform(X_valid)
-
-# imputer_y = SimpleImputer(strategy='median')
-# y_train = imputer_y.fit_transform(y_train)
-# y_test = imputer_y.transform(y_test) 
-# y_valid = imputer_y.fit_transform(y_valid)
-
-# # Model for multiple targets
-# model = lgb.LGBMRegressor(random_state= 42, num_leaves= 50, learning_rate= 0.05, max_depth= -1, n_estimators= 800)
-# multi_model = MultiOutputRegressor(model)
-
-# param_grid = {
-#         'estimator__learning_rate': [0.05, 0.1],
-#         'estimator__n_estimators': [400, 800],
-#         # 'estimator__max_depth': [-1, 15],
-#         # 'estimator__num_leaves': [50]
-#     }
-
-# # multi_model, best_parameters, grid_search = grid_searchCV(multi_model, param_grid, 5, X_train, y_train, "neg_mean_squared_error")
-
-# # Run cross-validation
-# # cv = KFold(n_splits=5, shuffle=True, random_state=42)
-# # score = "neg_mean_absolute_error"
-# # scores = cross_val_score(multi_model, X_train, y_train, scoring= score, cv=cv)
-# # print(f"Cross-validation {score} scores (negated):", -scores, np.std(scores))
-
-# # Fit the model
-# multi_model.fit(X_train, y_train)
-# # Testing
-# predictions = multi_model.predict(X_test)
-# # Validation
-# predictions_valid = multi_model.predict(X_valid)
-
-# # Report results
-# # Testing
-# df_pred_error = results(predictions, y_test, target_label)
-
-# # Validation
-# df_valid_error = results(predictions_valid, y_valid, target_label)
-
-# # print(df_pred_error, df_valid_error)
-# # SHAPvalues(target_label,multi_model)

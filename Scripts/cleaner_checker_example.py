@@ -38,12 +38,12 @@ the features extracted from those signals arent noise or are biased for badly lo
 Note that the dictResults for each key has a dataframe, that is the results of the metrics for each group of the .h5 file
 the report will just add a column to this dataframe with a flag (0 or 1) where 1 means we recommend discarding the signal or manually review the fiducials location
 '''
-# ck = Checker(path_fiducials,thresholds)
-# dictScore = ck.metrics()
-# dictResults = ck.results()
-# ck.report()
-# dictReport = ck.df_results
-# ck.h5format(filename_report)
+ck = Checker(path_fiducials,thresholds)
+dictScore = ck.metrics()
+dictResults = ck.results()
+ck.report()
+dictReport = ck.df_results
+ck.h5format(filename_report)
 
 ### Cleaning  the original dataset based on the report of the Checker
 ''' The cleanear wil read the report generate by the checker and will only use the "report" column to eliminate the signals an create a new .h5 file
@@ -52,8 +52,7 @@ and the number of signals that were eliminated
 '''
 c = Cleaner(filename_report)
 dictFlags = c.detect()
-print(dictFlags["p000022"])
 ## You can clean the data contaning the features or the original data with just the signals
-# clean_data = c.clean(path_fiducials) # path_originalData
-# c.csvReport(filename_csvReport)
-# c.saveh5(filename_cleanData)
+clean_data = c.clean(path_fiducials) # path_originalData
+c.csvReport(filename_csvReport)
+c.saveh5(filename_cleanData)
